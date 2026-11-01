@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Telco Churn Predictor</title>
+<style>
+  :root { --bg:#f5f6fa; --card:#fff; --text:#1c2230; --muted:#6b7385; --accent:#3b5bdb; --border:#dfe3ec; --good:#2f9e44; --bad:#e03131; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151c; --card:#1b2030; --text:#e8ebf3; --muted:#9aa3b8; --accent:#7c93ff; --border:#2d3447; --good:#51cf66; --bad:#ff6b6b; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:960px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { margin:0 0 4px; font-size:24px; }
+  p.sub { margin:0 0 20px; color:var(--muted); }
+  .layout { display:grid; grid-template-columns:1fr 300px; gap:20px; align-items:start; }
+  @media (max-width:760px) { .layout { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:20px; }
+  h2 { margin:0 0 12px; font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  fieldset { border:0; padding:0; margin:0 0 20px; display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:13px; color:var(--muted); }
+  select,input { font:inherit; color:var(--text); background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:8px; }
+  button { width:100%; font:inherit; font-weight:600; color:#fff; background:var(--accent); border:0; border-radius:8px; padding:11px; cursor:pointer; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .result { position:sticky; top:16px; text-align:center; }
+  .pct { font-size:48px; font-weight:700; margin:8px 0 0; }
+  .bar { height:10px; background:var(--border); border-radius:5px; overflow:hidden; margin:12px 0; position:relative; }
+  .bar > div { height:100%; width:0; background:var(--accent); transition:width .4s; }
+  .tick { position:absolute; top:0; bottom:0; width:2px; background:var(--text); opacity:.6; }
+  .verdict { font-weight:600; font-size:17px; }
+  .verdict.bad { color:var(--bad); } .verdict.good { color:var(--good); }
+  .muted { color:var(--muted); font-size:13px; }
+  .drivers { list-style:none; margin:0; padding:0; text-align:left; font-size:13px; }
+  .drivers li { display:flex; justify-content:space-between; gap:8px; padding:5px 0; border-top:1px solid var(--border); }
+  .drivers .up { color:var(--bad); } .drivers .down { color:var(--good); }
+  .err { color:var(--bad); font-size:13px; text-align:left; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Telco Churn Predictor</h1>
+  <p class="sub">Enter a customer's details to estimate their churn risk.</p>
+  <div class="layout">
+    <form class="card" id="form">
+      <h2>Account</h2>
+      <fieldset id="account"></fieldset>
+      <h2>Services</h2>
+      <fieldset id="services"></fieldset>
+      <h2>Billing</h2>
+      <fieldset id="billing"></fieldset>
+      <button id="go" type="submit">Predict churn</button>
+    </form>
+    <aside class="card result" id="result">
+      <h2>Prediction</h2>
+      <div class="muted" id="placeholder">Submit the form to see a result.</div>
+      <div id="out" hidden>
+        <div class="pct" id="pct"></div>
+        <div class="bar"><div id="fill"></div><span class="tick" id="tick"></span></div>
+        <div class="verdict" id="verdict"></div>
+        <div class="muted" id="thr"></div>
+        <h2 style="margin-top:18px;text-align:left">Top drivers</h2>
+        <ul class="drivers" id="drivers"></ul>
+      </div>
+      <div class="err" id="err"></div>
+    </aside>
+  </div>
+</main>
+<script>
+const YN = ["Yes","No"], YNP = ["Yes","No","No phone service"], YNI = ["Yes","No","No internet service"];
+const groups = {
+  account: [
+    ["gender",["Male","Female"]], ["SeniorCitizen",[0,1],"Senior citizen (0/1)"], ["Partner",YN],
+    ["Dependents",YN], ["tenure","number","Tenure (months)",5],
+  ],
+  services: [
+    ["PhoneService",YN], ["MultipleLines",YNP], ["InternetService",["Fiber optic","DSL","No"]],
+    ["OnlineSecurity",YNI], ["OnlineBackup",YNI], ["DeviceProtection",YNI],
+    ["TechSupport",YNI], ["StreamingTV",YNI], ["StreamingMovies",YNI],
+  ],
+  billing: [
+    ["Contract",["Month-to-month","One year","Two year"]], ["PaperlessBilling",YN],
+    ["PaymentMethod",["Electronic check","Mailed check","Bank transfer (automatic)","Credit card (automatic)"]],
+    ["MonthlyCharges","number","Monthly charges",70.35], ["TotalCharges","number","Total charges",350.75],
+  ],
+};
+for (const [id, fields] of Object.entries(groups)) {
+  const fs = document.getElementById(id);
+  for (const [name, type, label, def] of fields) {
+    const l = document.createElement("label");
+    l.textContent = label || (Array.isArray(type) && typeof label === "undefined" ? name : name);
+    let el;
+    if (Array.isArray(type)) {
+      el = document.createElement("select");
+      type.forEach(v => el.add(new Option(v, v)));
+    } else {
+      el = document.createElement("input");
+      el.type = "number"; el.step = "any"; el.min = 0; el.value = def; el.required = true;
+    }
+    el.name = name;
+    l.appendChild(el); fs.appendChild(l);
+  }
+}
+const $ = id => document.getElementById(id);
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const body = {};
+  for (const el of e.target.elements) {
+    if (!el.name) continue;
+    body[el.name] = el.type === "number" || el.name === "SeniorCitizen" ? Number(el.value) : el.value;
+  }
+  $("go").disabled = true; $("err").textContent = "";
+  try {
+    const r = await fetch("/predict", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+    const d = await r.json();
+    if (!r.ok) throw new Error(Array.isArray(d.detail) ? d.detail.map(x => x.loc.slice(1).join(".") + ": " + x.msg).join("\n") : d.detail);
+    const p = d.churn_probability * 100;
+    $("placeholder").hidden = true; $("out").hidden = false;
+    $("pct").textContent = p.toFixed(1) + "%";
+    $("fill").style.width = p + "%";
+    $("tick").style.left = d.threshold * 100 + "%";
+    $("verdict").textContent = d.churn_prediction ? "Likely to churn" : "Likely to stay";
+    $("verdict").className = "verdict " + (d.churn_prediction ? "bad" : "good");
+    $("drivers").innerHTML = "";
+    for (const t of d.top_drivers) {
+      const li = document.createElement("li");
+      const up = t.contribution > 0;
+      li.innerHTML = `<span>${t.feature} = ${t.value}</span><span class="${up ? "up" : "down"}">${up ? "▲ raises" : "▼ lowers"}</span>`;
+      $("drivers").appendChild(li);
+    }
+    $("thr").textContent = "Decision threshold: " + (d.threshold * 100).toFixed(0) + "% (marker on bar)";
+  } catch (x) { $("err").textContent = x.message; }
+  $("go").disabled = false;
+});
+</script>
+</body>
+</html>
